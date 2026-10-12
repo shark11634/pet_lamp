@@ -21,10 +21,26 @@
 
 ---
 
-## 2. 推送（本机网络不通，需在能访问 GitHub 的机器上做）
+## 2. 推送
 
-本机 `github.com:443` 被阻断（`Failed to connect to github.com port 443`），
-所以推送没能在这里完成。有三种方式，**推荐第 1 种**。
+### 为什么没能在这里推完（已定位到根因）
+
+不是 GitHub 不可达。同一台机器、同一时刻的实测：
+
+| 探测方式 | 结果 |
+|---|---|
+| Python 自带 TLS 栈 → `https://github.com/shark11634/pet_lamp` | **HTTP 200** |
+| `git -c http.sslBackend=openssl` → `https://gitee.com/...` | **成功列出 refs** |
+| `git` → `https://api.github.com/...` | 连接建立（返回 403，属正常匿名拒绝） |
+| `git` → `https://github.com/shark11634/pet_lamp.git` | `Recv failure: Connection was reset` |
+
+结论：**出网是通的，是开发环境的沙箱拦住了 git.exe 的出网**。
+`curl.exe` / schannel 报的 `SEC_E_NO_CREDENTIALS` 也是沙箱不让读
+Windows 证书库所致，同样是沙箱现象，不是网络问题。
+
+也就是说，只要在**不受该沙箱限制的环境**里执行推送即可 —— 这正是下面的方式 1。
+
+三种方式，**推荐方式 1**。
 
 ### 方式 1（推荐）：用 bundle 一键推送
 
