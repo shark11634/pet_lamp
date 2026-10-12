@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>宠物活动状态灯</title>
+<style>
+:root{
+  --bg:#14161a; --card:#1e2128; --card2:#262a33; --fg:#e8eaee; --dim:#9aa1ad;
+  --accent:#4da3ff; --ok:#3ecf8e; --warn:#ffb454; --bad:#ff6b6b;
+  --quiet:#ffd9ab; --light:#7ee8a2; --active:#4dc3ff; --lost:#b58cff;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:14px;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+h1{font-size:19px;margin:0 0 4px}
+.sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+.card{background:var(--card);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{font-size:14px;margin:0 0 10px;color:var(--dim);font-weight:600;letter-spacing:.02em}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 0}
+.row label{color:var(--dim);font-size:13px;flex:0 0 auto}
+.row .val{font-variant-numeric:tabular-nums;font-size:13px;color:var(--fg);min-width:58px;text-align:right}
+input[type=range]{flex:1;accent-color:var(--accent);height:22px}
+button{background:var(--card2);color:var(--fg);border:0;border-radius:9px;padding:9px 14px;font-size:14px;cursor:pointer}
+button:active{transform:scale(.97)}
+button.primary{background:var(--accent);color:#08121e;font-weight:700}
+button.danger{background:#3a2226;color:#ffb3b3}
+button.on{background:var(--ok);color:#062015;font-weight:700}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+.b-quiet{background:#4a3a22;color:var(--quiet)}
+.b-light{background:#1e4630;color:var(--light)}
+.b-active{background:#123a52;color:var(--active)}
+.b-lost{background:#35294d;color:var(--lost)}
+.b-boot{background:#333;color:#bbb}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 6px;border-bottom:1px solid #2c313a;white-space:nowrap}
+th{color:var(--dim);font-weight:600;font-size:11.5px}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.dead td{opacity:.45}
+.name-in{background:#12141a;border:1px solid #343a45;color:var(--fg);border-radius:7px;padding:5px 7px;width:96px;font-size:13px}
+.hint{color:var(--dim);font-size:12px;line-height:1.55}
+.sw{position:relative;width:50px;height:28px;flex:0 0 auto}
+.sw input{opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.sw span{position:absolute;inset:0;background:#3a404b;border-radius:999px;transition:.15s;pointer-events:none}
+.sw span:before{content:"";position:absolute;width:22px;height:22px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s}
+.sw input:checked+span{background:var(--ok)}
+.sw input:checked+span:before{transform:translateX(22px)}
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tabs button{flex:1;background:var(--card);color:var(--dim)}
+.tabs button.sel{background:var(--card2);color:var(--fg);font-weight:700}
+.pane{display:none}.pane.sel{display:block}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:1px}
+.d-ok{background:var(--ok)}.d-bad{background:var(--bad)}.d-warn{background:var(--warn)}
+</style>
+</head>
+<body>
+
+<h1>宠物活动状态灯</h1>
+<div class="sub" id="sub">加载中…</div>
+
+<div class="tabs">
+  <button id="tab-pet" class="sel" onclick="showPane('pet')">宠物状态</button>
+  <button id="tab-light" onclick="showPane('light')">灯光控制</button>
+  <button id="tab-set" onclick="showPane('set')">设置</button>
+</div>
+
+<!-- ============ 宠物状态 ============ -->
+<div class="pane sel" id="pane-pet">
+  <div class="card">
+    <h2>当前显示</h2>
+    <div class="row"><label>合并状态</label><div id="st" class="val">—</div></div>
+    <div class="row"><label>来源</label><div id="src" class="val">—</div></div>
+    <div class="row"><label>活动分数</label><div id="score" class="val">—</div></div>
+    <div class="row"><label>夜间模式</label><div id="night" class="val">—</div></div>
+    <div class="row"><label>手动豁免</label><div id="ovr" class="val">—</div></div>
+    <div class="row"><label>距最后心跳</label><div id="age" class="val">—</div></div>
+  </div>
+
+  <div class="card">
+    <h2>狗狗列表（点击名字可修改）</h2>
+    <table>
+      <thead><tr>
+        <th>名字</th><th>状态</th><th class="num">分数</th><th class="num">电量</th>
+        <th class="num">信号</th><th class="num">最近</th><th></th>
+      </tr></thead>
+      <tbody id="devs"><tr><td colspan="7" class="hint">暂无已绑定的佩戴端</td></tr></tbody>
+    </table>
+    <div class="actions">
+      <button class="primary" onclick="doAct('pairing')">进入配对模式</button>
+      <button onclick="doAct('focus',{index:-1})">合并显示</button>
+      <button class="danger" onclick="if(confirm('解除全部绑定？'))doAct('clear_bindings')">清空绑定</button>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      配对模式持续 60 秒：佩戴端在这段时间内上电并广播 <code>PAIR_REQUEST</code>，
+      灯就会把它记下来。**多只狗可以一次配对完**（60 秒内收到几只就绑几只）。
+      单只狗时短按面板色彩键的行为与原厂一致；多只狗时短按改为切换"合并 / 只看某只"。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 灯光控制 ============ -->
+<div class="pane" id="pane-light">
+  <div class="card">
+    <h2>灯光</h2>
+    <div class="row">
+      <label>开关</label>
+      <div class="sw"><input type="checkbox" id="pw" onchange="setLight('power',this.checked?'true':'false',true)"><span></span></div>
+    </div>
+    <div class="row">
+      <label>模式</label>
+      <div>
+        <button id="m-day" onclick="setLight('mode',2)">日光</button>
+        <button id="m-color" onclick="setLight('mode',1)">彩光</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>亮度</label>
+      <input type="range" id="br" min="1" max="100" step="1" oninput="setLight('brightness',+this.value,false,true)">
+      <div class="val" id="brv">—</div>
+    </div>
+    <div class="row">
+      <label>色温</label>
+      <input type="range" id="ct" min="1700" max="6500" step="50" oninput="setLight('color_temp',+this.value,false,true)">
+      <div class="val" id="ctv">—</div>
+    </div>
+    <div class="row">
+      <label>颜色</label>
+      <input type="color" id="rgb" oninput="setLight('rgb',parseInt(this.value.slice(1),16),false,true)">
+      <div class="val" id="rgbv">—</div>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      属性模型与原厂米家一致：开关、亮度 1–100、色温 1700–6500 K、颜色、模式（彩光 / 日光）。
+      任何操作都会进入"手动模式"：手动期间**暂停宠物自动灯效**、夜间压制不生效；
+      无操作满 <span id="ovrmin">10</span> 分钟后自动回到宠物状态显示。
+    </div>
+    <div class="actions">
+      <button onclick="doAct('exit_manual')">立即恢复自动显示</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 设置 ============ -->
+<div class="pane" id="pane-set">
+  <div class="card">
+    <h2>夜间免打扰</h2>
+    <div class="row">
+      <label>夜间模式</label>
+      <div class="sw"><input type="checkbox" id="n-en" onchange="doAct('night_enabled',{value:this.checked?1:0})"><span></span></div>
+    </div>
+    <div class="row">
+      <label>时间窗</label>
+      <div>
+        <input class="name-in" style="width:64px" id="n-s" type="number" min="0" max="23"> :
+        <input class="name-in" style="width:64px" id="n-e" type="number" min="0" max="23">
+        <button onclick="doAct('night_window',{start:+document.getElementById('n-s').value,end:+document.getElementById('n-e').value})">保存</button>
+      </div>
+    </div>
+    <div class="row"><label>Quiet 上限</label><input type="range" id="c-q" min="0" max="255" step="1"><div class="val" id="c-qv">—</div></div>
+    <div class="row"><label>Light 上限</label><input type="range" id="c-l" min="0" max="255" step="1"><div class="val" id="c-lv">—</div></div>
+    <div class="row"><label>Active 上限</label><input type="range" id="c-a" min="0" max="255" step="1"><div class="val" id="c-av">—</div></div>
+    <div class="row"><label>Lost 上限</label><input type="range" id="c-x" min="0" max="255" step="1"><div class="val" id="c-xv">—</div></div>
+    <div class="actions">
+      <button class="primary" onclick="doAct('night_caps',{quiet:+document.getElementById('c-q').value,light:+document.getElementById('c-l').value,active:+document.getElementById('c-a').value,lost:+document.getElementById('c-x').value})">保存夜间上限</button>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      上限是逻辑亮度 0–255（不是百分比）。默认 Active = 18 ≈ 7%，
+      比日间的 20%–40% 暗得多 —— 需求明确要求"不在夜间把 Active 设为高亮"。
+      夜间还有 Active 响应节流：狗翻身不会让灯反复亮灭。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>时间与响应</h2>
+    <div class="row">
+      <label>手动豁免时长</label>
+      <input type="range" id="o-min" min="1" max="120" step="1">
+      <div class="val" id="o-minv">—</div>
+    </div>
+    <div class="actions">
+      <button onclick="doAct('override_minutes',{value:+document.getElementById('o-min').value})">保存豁免时长</button>
+    </div>
+    <div class="row">
+      <label>夜间响应节流</label>
+      <input type="range" id="thr" min="10000" max="600000" step="10000">
+      <div class="val" id="thrv">—</div>
+    </div>
+    <div class="row">
+      <label>失联超时</label>
+      <input type="range" id="lost" min="10000" max="600000" step="5000">
+      <div class="val" id="lostv">—</div>
+    </div>
+    <div class="actions">
+      <button onclick="doAct('night_throttle_ms',{value:+document.getElementById('thr').value})">保存节流</button>
+      <button onclick="doAct('lost_timeout_ms',{value:+document.getElementById('lost').value})">保存失联超时</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>设备表</h2>
+    <div class="row">
+      <label>最大支持只数</label>
+      <input type="range" id="mx" min="1" max="16" step="1">
+      <div class="val" id="mxv">—</div>
+    </div>
+    <div class="actions">
+      <button onclick="doAct('max_devices',{value:+document.getElementById('mx').value})">保存</button>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      全部设置都写入 NVS，断电重启后保留。绑定与设置改变时才写 Flash，
+      不会每收一包就写（需求 6.3）。
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+var S = {state:null, devs:[], set:null};
+var pollTimer = null;
+
+function showPane(id){
+  ["pet","light","set"].forEach(function(p){
+    document.getElementById("pane-"+p).classList.toggle("sel", p===id);
+    document.getElementById("tab-"+p).classList.toggle("sel", p===id);
+  });
+}
+
+function api(path, opts){
+  return fetch(path, opts).then(function(r){
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return r.json();
+  });
+}
+
+function post(path, obj){
+  return api(path, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(obj)
+  });
+}
+
+function fmtAge(ms){
+  if(ms===null||ms===undefined) return "从未";
+  if(ms<1500) return (ms/1000).toFixed(1)+" s";
+  if(ms<90000) return Math.round(ms/1000)+" s";
+  return Math.round(ms/60000)+" min";
+}
+function fmtMs(ms){ return ms>=60000 ? Math.round(ms/60000)+" 分钟" : Math.round(ms/1000)+" 秒"; }
+function stateBadge(s){
+  var map={Quiet:"b-quiet",Light:"b-light",Active:"b-active",Lost:"b-lost",Boot:"b-boot"};
+  return '<span class="badge '+(map[s]||"b-boot")+'">'+s+'</span>';
+}
+function dot(ok){ return '<span class="dot '+(ok?"d-ok":"d-bad")+'"></span>'; }
+
+function render(){
+  var st=S.state, devs=S.devs, cfg=S.set;
+  if(!st||!cfg) return;
+
+  document.getElementById("sub").innerHTML =
+    "已绑定 "+st.device_count+" / "+st.max_devices+" 只 &nbsp;·&nbsp; "+
+    (st.pairing?'<span style="color:var(--ok)">配对模式进行中</span>':'正常监听');
+
+  document.getElementById("st").innerHTML = stateBadge(st.merged_state);
+  document.getElementById("src").textContent = st.source_name;
+  document.getElementById("score").textContent = st.activity_score;
+  document.getElementById("night").textContent = st.night_mode + (st.night_active?"（生效中）":"");
+  document.getElementById("ovr").textContent =
+    st.manual_mode ? ("手动中，剩余 "+fmtMs(st.override_remaining_ms)) : "未激活";
+  document.getElementById("age").textContent = fmtAge(st.lost_age_ms);
+
+  // 灯光页
+  document.getElementById("pw").checked = !!st.manual_on;
+  document.getElementById("br").value = st.brightness_pct;
+  document.getElementById("brv").textContent = st.brightness_pct+" %";
+  document.getElementById("ct").value = st.color_temp_k;
+  document.getElementById("ctv").textContent = st.color_temp_k+" K";
+  document.getElementById("rgb").value = "#"+("000000"+st.rgb.toString(16)).slice(-6);
+  document.getElementById("rgbv").textContent = "#"+("000000"+st.rgb.toString(16)).slice(-6).toUpperCase();
+  document.getElementById("m-day").className = st.light_mode===2?"on":"";
+  document.getElementById("m-color").className = st.light_mode===1?"on":"";
+  document.getElementById("ovrmin").textContent = Math.round(cfg.override_ms/60000);
+
+  // 设置页
+  document.getElementById("n-en").checked = !!cfg.night_enabled;
+  if(document.activeElement.id!=="n-s") document.getElementById("n-s").value = cfg.night_start_hour;
+  if(document.activeElement.id!=="n-e") document.getElementById("n-e").value = cfg.night_end_hour;
+  var caps=cfg.night_caps;
+  setSlider("c-q",caps.quiet); setSlider("c-l",caps.light);
+  setSlider("c-a",caps.active); setSlider("c-x",caps.lost);
+  setSlider("o-min",Math.round(cfg.override_ms/60000));
+  setSlider("thr",cfg.night_throttle_ms);
+  setSlider("lost",cfg.lost_timeout_ms);
+  setSlider("mx",cfg.max_devices);
+
+  // 狗狗表格
+  var tb=document.getElementById("devs");
+  if(!devs.length){
+    tb.innerHTML='<tr><td colspan="7" class="hint">暂无已绑定的佩戴端。进入配对模式后让佩戴端上电即可。</td></tr>';
+    return;
+  }
+  tb.innerHTML = devs.map(function(d){
+    return '<tr class="'+(d.alive?"":"dead")+'">'+
+      '<td><input class="name-in" value="'+(d.name_custom?esc(d.name):"")+'" placeholder="'+esc(d.name)+'" '+
+        'onchange="rename('+d.device_id+',this.value)"></td>'+
+      '<td>'+stateBadge(d.state)+'</td>'+
+      '<td class="num">'+d.activity_score+'</td>'+
+      '<td class="num">'+d.battery_percent+' %</td>'+
+      '<td class="num">'+d.rssi+' dBm</td>'+
+      '<td class="num">'+fmtAge(d.last_seen_age_ms)+'</td>'+
+      '<td><button onclick="doAct(\'focus\',{index:'+d.index+'})">只看</button> '+
+          '<button class="danger" onclick="doAct(\'remove\',{device_id:'+d.device_id+'})">解绑</button></td>'+
+    '</tr>';
+  }).join("");
+}
+function esc(s){ return String(s).replace(/[&<>"']/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function setSlider(id,v){
+  var el=document.getElementById(id); if(!el) return;
+  if(document.activeElement!==el) el.value=v;
+  var out=document.getElementById(id+"v");
+  if(out) out.textContent=v;
+}
+
+function refresh(){
+  return Promise.all([
+    api("/api/pet/state"),
+    api("/api/pet/devices"),
+    api("/api/pet/settings")
+  ]).then(function(r){ S.state=r[0]; S.devs=r[1]; S.set=r[2]; render(); })
+   .catch(function(e){ document.getElementById("sub").textContent="读取失败："+e.message; });
+}
+
+var postTimer=null, pending=null;
+function setLight(action,value,immediate,coalesce){
+  pending={action:action,value:value};
+  if(immediate){ flushLight(); return; }
+  if(coalesce){
+    if(postTimer) clearTimeout(postTimer);
+    postTimer=setTimeout(flushLight,180);
+    return;
+  }
+  flushLight();
+}
+function flushLight(){
+  if(postTimer){ clearTimeout(postTimer); postTimer=null; }
+  if(!pending) return;
+  var p=pending; pending=null;
+  post("/api/light",{action:p.action,value:p.value}).then(function(r){
+    if(r.state) S.state=r.state;
+    if(r.devices) S.devs=r.devices;
+    render();
+  });
+}
+function rename(id,name){ doAct("rename",{device_id:id,name:name}); }
+
+function doAct(action,extra){
+  var body={action:action};
+  if(extra) for(var k in extra) body[k]=extra[k];
+  post("/api/pet",body).then(function(r){
+    if(r.ok===false){ alert("失败："+(r.error||"未知错误")); }
+    if(r.state) S.state=r.state;
+    if(r.devices) S.devs=r.devices;
+    return refresh();
+  }).catch(function(e){ alert("请求失败："+e.message); });
+}
+
+refresh().then(function(){
+  pollTimer=setInterval(refresh,3000);
+});
+</script>
+</body>
+</html>

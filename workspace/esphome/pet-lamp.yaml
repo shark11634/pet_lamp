@@ -1,0 +1,257 @@
+# ==================================================================
+# 宠物活动状态灯 V1 — ESPHome 设备配置（方案 A 主线）
+#
+# 目标硬件：米家床头灯 2 / bslamp2 / MUE4093GL（ESP32-WROOM-32D, 4MB）
+#
+# ⚠️ 刷机前必须已完整备份原厂 4MB Flash（见 README 的恢复流程）。
+#
+# 本文件只完整配置**本工程自己的部分**（pet_status_lamp）。
+# 灯板与触控面板的硬件配置来自社区组件 xiaomi_bslamp2，它的键名以该仓库
+# 的 example.yaml 为准：https://github.com/mmakaay/esphome-xiaomi_bslamp2
+# 我无法在本机联网核对该仓库的最终键名，因此不在这里臆造；
+# 把下面 "灯板与触控面板" 段落替换成该仓库 example.yaml 里的对应段落即可。
+# 引脚取值可直接用本工程从需求文档恢复的表格（见文件末尾注释）。
+# ==================================================================
+
+esphome:
+  name: pet-status-lamp
+  friendly_name: 宠物活动状态灯
+  # bslamp2 内部 ESP32 有特殊兼容要求：必须单核运行
+  # （社区项目同样要求 ignore_efuse_custom_mac / ignore_efuse_mac_crc，
+  #   ESPHome 里通过 platformio_options 传入）
+  platformio_options:
+    board_build.f_cpu: 240000000L
+    build_flags:
+      - -DCONFIG_FREERTOS_UNICORE=1
+      - -DCONFIG_ESP32_DEFAULT_CPU_FREQ_240=1
+      # Wi-Fi 与 BLE 共存：先按均衡，实测有效包率不足再改 PREFER_BLE
+      - -DCONFIG_SW_COEXIST_ENABLE=1
+      - -DCONFIG_ESP_COEX_SW_COEXIST_PREFERENCE=1   # 1 = PREFER_BALANCE
+
+esp32:
+  board: esp32doit-devkit-v1
+  framework:
+    type: esp-idf          # 用 esp-idf 而不是 arduino：
+                           # 1) 与需求 §6.2「最终产品路线是 ESP-IDF」一致
+                           # 2) 我们可以直接调 LEDC 拿到 14-bit 分辨率
+    version: recommended
+  variant: esp32
+
+# ------------------------------------------------------------------
+# 外部组件
+# ------------------------------------------------------------------
+external_components:
+  # 本工程自己的组件（路径相对本 YAML 文件所在目录）
+  - source:
+      type: local
+      path: components
+    components: [pet_status_lamp]
+
+  # 社区灯板/触控面板组件（可选，但**强烈建议**：
+  # 它提供原厂的触控面板 I²C 协议、12 颗面板指示灯、RGB+白光驱动。
+  # 取消注释即启用；启用后请把下面 "灯板与触控面板" 段落换成该仓库的写法。
+  # - source: github://mmakaay/esphome-xiaomi_bslamp2@dev
+
+# ------------------------------------------------------------------
+# 网络与服务
+# ------------------------------------------------------------------
+logger:
+  level: INFO
+  # 需求 §8.5：开发版本日志至少输出 boot reason、包率、RSSI、last_seen；
+  # 生产/用户体验版本应降低等级（改成 WARN）以免影响实时性与功耗。
+  baud_rate: 115200
+  logs:
+    esp32_ble_tracker: WARN
+    pet_status_lamp: INFO
+    # core/ 的日志走 ESPHome 的日志组件；下面这两个是 BLE 栈的噪声源
+    ble: WARN
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+safe_mode:
+  # 刷坏后能自动回落到安全模式，方便重新 OTA
+  num_attempts: 5
+  reboot_timeout: 10min
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # 断网不影响核心功能（需求 §2.1）：掉线后 BLE 扫描、状态机、灯效照常工作
+  ap:
+    ssid: "pet-lamp-fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# 内置时间源：夜间模式的时间窗判据。
+# 没有网络时钟时 night_mode 会自动退化为"空闲推断"（默认 120 分钟），
+# 所以即使时间同步失败，夜间免打扰仍然有效。
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Asia/Shanghai
+
+# ESPHome 自带的 web_server：可选的额外 UI。
+# 注意端口不要和 pet_status_lamp 的 web_port 冲突（后者默认 8080）。
+# web_server:
+#   port: 80
+#   version: 3
+
+# MQTT / Home Assistant 自动发现（档 2）。
+# 所有实体都用 lambda 从本组件读取，实体定义见文件末尾的「实体映射」段。
+# mqtt:
+#   broker: !secret mqtt_broker
+#   username: !secret mqtt_user
+#   password: !secret mqtt_password
+#   discovery: true
+
+# ------------------------------------------------------------------
+# BLE：被动扫描（灯端只监听，从不发起连接）
+# ------------------------------------------------------------------
+esp32_ble_tracker:
+  # 被动扫描：不发 SCAN_REQ，佩戴端因此更省电（需求 §3.5）
+  scan_parameters:
+    interval: 320ms
+    window: 300ms
+    active: false          # ← 关键：被动扫描
+    continuous: true
+    # 故意**不设** duration：让扫描一直跑，避免每个扫描周期之间的空档丢包。
+    # 若你遇到 BLE 栈异常，可临时加 duration: 5min 让它周期性重启。
+  # 不需要 on_ble_advertise：实际解析在本组件里，YAML 层不用处理。
+
+# ------------------------------------------------------------------
+# 灯板与触控面板（来自社区组件）
+# ------------------------------------------------------------------
+# ⚠️ 请把这一整段替换成 https://github.com/mmakaay/esphome-xiaomi_bslamp2
+#    的 example.yaml 对应内容。它负责：
+#      light        RGB + 白光（4 路 PWM）
+#      front_panel  触控面板（电源键 / 色彩键 / 亮度滑条 / 12 颗指示灯）
+#    本工程**不**接管那两块硬件，只把宠物状态算出来交给它显示。
+#
+# 引脚取值（本工程从需求文档 §4.2 恢复，可直接用于该组件的配置）：
+#   RGB 通道   红 GPIO13 / 绿 GPIO14 / 蓝 GPIO5
+#   白光通道   GPIO12
+#   主开关 1   GPIO33
+#   主开关 2   GPIO4
+#   面板 I²C   SDA GPIO21 / SCL GPIO19，中断 GPIO16
+#   调试 UART  TX GPIO1 / RX GPIO3，Boot 下载 GPIO0
+
+# ------------------------------------------------------------------
+# 本工程：宠物活动状态灯
+# ------------------------------------------------------------------
+pet_status_lamp:
+  id: pet_lamp
+  # ---- 多狗（决策 D6：默认 8，网页可配 1–16） ----
+  max_devices: 8
+  # ---- 失联与豁免（需求 §4.3 / 决策 D9） ----
+  lost_timeout: 60s
+  manual_override: 10min        # 决策 D9：默认 10 分钟，网页可改 1–120
+  pair_window: 60s
+  # ---- 夜间免打扰（决策 D8 / D14） ----
+  night_enabled: true
+  night_start_hour: 22
+  night_end_hour: 7
+  night_idle_infer: 120min      # 无时钟时的退化判据
+  night_cap_quiet: 10           # ≈ 4%
+  night_cap_light: 14           # ≈ 5.5%
+  night_cap_active: 18          # ≈ 7%（决策 D14）
+  night_cap_lost: 6             # ≈ 2.4%
+  night_active_throttle: 60s    # 夜间 Active 每分钟最多响应一次
+  night_suppress_lowbattery: true
+  # ---- 内置网页（档 1 App 控制） ----
+  web_port: 8080                # 默认 8080，避免和 ESPHome web_server(80) 冲突
+  web_username: admin
+  web_password: !secret pet_web_password
+  # ---- 灯板引脚（若社区组件已经接管灯板，这些只在"不启用社区组件"时生效） ----
+  pin_red: 13
+  pin_green: 14
+  pin_blue: 5
+  pin_white: 12
+  pin_switch1: 33
+  pin_switch2: 4
+
+# ==================================================================
+# 实体映射（可选，但推荐）
+#
+# 本组件**不**直接生成 ESPHome 实体，而是通过公开 getter 暴露状态，
+# 由 YAML 用 lambda 读取。这样：
+#   · 不耦合 ESPHome 各版本的实体基类头文件（避免版本脆性）
+#   · MQTT / Home Assistant 自动发现由 ESPHome 自己负责
+#   · 你想怎么组织实体就怎么组织
+#
+# 解除下面的注释即可获得 HA / MQTT 里的完整视图。
+# ==================================================================
+#
+# text_sensor:
+#   - platform: template
+#     name: "宠物状态"
+#     update_interval: 2s
+#     lambda: |-
+#       return {id(pet_lamp).merged_state_name()};
+#   - platform: template
+#     name: "宠物状态来源"
+#     update_interval: 2s
+#     lambda: |-
+#       static char buf[PET_DEV_NAME_LEN + 8];
+#       auto &r = id(pet_lamp).registry();
+#       uint8_t idx = id(pet_lamp).merged_source();
+#       if (idx == PET_FOCUS_MERGE || idx >= r.count) return {"合并显示"};
+#       pet_reg_display_name(&r, idx, buf, sizeof(buf));
+#       return {buf};
+#
+# sensor:
+#   - platform: template
+#     name: "宠物活动分数"
+#     update_interval: 2s
+#     accuracy_decimals: 0
+#     lambda: |-
+#       return id(pet_lamp).merged_score();
+#   - platform: template
+#     name: "宠物失联时长"
+#     unit_of_measurement: "s"
+#     update_interval: 5s
+#     accuracy_decimals: 0
+#     lambda: |-
+#       auto age = id(pet_lamp).lost_age_ms();
+#       return (age == UINT64_MAX) ? NAN : (age / 1000.0f);
+#   - platform: template
+#     name: "已绑定佩戴端数量"
+#     update_interval: 30s
+#     accuracy_decimals: 0
+#     lambda: |-
+#       return id(pet_lamp).device_count();
+#
+# binary_sensor:
+#   - platform: template
+#     name: "夜间模式生效中"
+#     lambda: |-
+#       return id(pet_lamp).night() .manual_mode ? false
+#            : (id(pet_lamp).night_mode_name()[0] == 'N');
+#   - platform: template
+#     name: "手动豁免中"
+#     lambda: |-
+#       return id(pet_lamp).night().manual_mode;
+#   - platform: template
+#     name: "佩戴端低电量"
+#     lambda: |-
+#       return id(pet_lamp).low_battery();
+#
+# button:
+#   - platform: template
+#     name: "进入配对模式"
+#     on_press:
+#       - lambda: id(pet_lamp).cmd_enter_pairing();
+#   - platform: template
+#     name: "清空绑定"
+#     on_press:
+#       - lambda: id(pet_lamp).cmd_clear_bindings();
+#   - platform: template
+#     name: "恢复自动灯效"
+#     on_press:
+#       - lambda: id(pet_lamp).cmd_exit_manual();
